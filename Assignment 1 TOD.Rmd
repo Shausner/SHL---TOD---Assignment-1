@@ -1,0 +1,508 @@
+---
+title: "Assignment 1 Transit Oriented Development"
+author: "Sam Hausner-Levine"
+date: "11/18/2021"
+
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: "hide"
+    code_download: true
+editor_options: 
+chunk_output_type: console
+---
+# Table of Contents
+1. Introduction
+2. Loading Environments and Wrangling Data
+3. Visualizations comparing census variables across TOD and non-TOD tracts, 2009 vs. 2019
+4. TOD vs. Non-TOD Grouped Bar Plots and Table
+5. Graduated Symbol Maps of Rent and Population within 1/2 Mile of Metro Stations
+6. Rent as a Function of Distance from Metro Stations
+7. Relationship Between Transit Access, Rent and Crime(Motor Vehicle Theft)
+
+## Introduction
+For this assignment, I looked at economic and demographic shifts in Washington D.C. in relation to the city's metro system. Data was collected from the 2009 and 2019 decennial censuses on the population size, gender, education level, income, and residential rents. Crime data was also included on reported motor vehicle thefts for an analysis of the relationship between rents, access to transit and crime.
+
+## Loading Environments and Wrangling Data
+```{r Data Wrangling, include=FALSE, warning = FALSE, message = FALSE, results = 'markup'}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(kableExtra)
+
+options(scipen=999)
+options(tigris_class = "sf")
+
+mapTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 16,colour = "black"),
+    plot.subtitle=element_text(face="italic"),
+    plot.caption=element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.text.x = element_text(size = 14))
+}
+
+plotTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 16,colour = "black"),
+    plot.subtitle = element_text(face="italic"),
+    plot.caption = element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    panel.grid.major = element_line("grey80", size = 0.1),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.background = element_rect(fill = "grey80", color = "white"),
+    strip.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.text = element_text(size=10),
+    plot.background = element_blank(),
+    legend.background = element_blank(),
+    legend.title = element_text(colour = "black", face = "italic"),
+    legend.text = element_text(colour = "black", face = "italic"),
+    strip.text.x = element_text(size = 14)
+  )
+}
+
+qBr <- function(df, variable, rnd) {
+  if (missing(rnd)) {
+    as.character(quantile(round(df[[variable]],0),
+                          c(.01,.2,.4,.6,.8), na.rm=T))
+  } else if (rnd == FALSE | rnd == F) {
+    as.character(formatC(quantile(df[[variable]],
+                 c(.01,.2,.4,.6,.8),  na.rm=T), digits = 3))
+  }
+}
+
+q5 <- function(variable) {as.factor(ntile(variable, 5))}
+
+palette5 <- c("#f0f9e8","#bae4bc","#7bccc4","#43a2ca","#0868ac")
+
+
+
+
+
+
+census_api_key("efd8ec63b0f13c052d9df5a9860bd4f889e7fbd2", overwrite = TRUE)
+
+tracts09 <-  
+  get_acs(geography = "tract", variables = c("B25026_001E","B02001_002E","B15001_050E",
+                                             "B15001_009E","B19013_001E","B25058_001E",
+                                             "B06012_002E"), 
+          year=2009, state=11, county=001, geometry=T) %>% 
+  st_transform('ESRI:102685')
+
+tracts09 <- 
+  tracts09 %>%
+  dplyr::select( -NAME, -moe) %>%
+  spread(variable, estimate) %>%
+  dplyr::select(-geometry) %>%
+  rename(TotalPop = B25026_001, 
+         Whites = B02001_002,
+         FemaleBachelors = B15001_050, 
+         MaleBachelors = B15001_009,
+         MedHHInc = B19013_001, 
+         MedRent = B25058_001,
+         TotalPoverty = B06012_002)
+
+tracts09 <- 
+  tracts09 %>%
+  mutate(pctWhite = ifelse(TotalPop > 0, Whites / TotalPop, 0),
+         pctBachelors = ifelse(TotalPop > 0, ((FemaleBachelors + MaleBachelors) / TotalPop), 0),
+         pctPoverty = ifelse(TotalPop > 0, TotalPoverty / TotalPop, 0),
+         year = "2009") %>%
+  dplyr::select(-Whites,-FemaleBachelors,-MaleBachelors,-TotalPoverty)
+
+DC_Crime09 <- st_read("C:/Users/shaus/Downloads/Crime_Incidents_in_2009 (1).geojson")%>%
+  st_transform(st_crs(tracts09))
+
+MVT09 <- DC_Crime09 %>%
+  filter(OFFENSE == "MOTOR VEHICLE THEFT")
+
+MVT09_Tracts <- MVT09 %>%
+  st_join(tracts09) %>% 
+  mutate(count = 1) %>%
+  group_by(GEOID) %>%
+  summarise(MVT_count = sum(count))
+
+tracts09 <- tracts09 %>%
+  st_join(MVT09_Tracts)
+
+
+
+tracts19 <- 
+  get_acs(geography = "tract", variables = c("B25026_001E","B02001_002E","B15001_050E",
+                                             "B15001_009E","B19013_001E","B25058_001E",
+                                             "B06012_002E"), 
+          year=2019, state=11, county=001, geometry=T, output="wide") %>%
+  st_transform('ESRI:102685') %>%
+  rename(TotalPop = B25026_001E, 
+         Whites = B02001_002E,
+         FemaleBachelors = B15001_050E, 
+         MaleBachelors = B15001_009E,
+         MedHHInc = B19013_001E, 
+         MedRent = B25058_001E,
+         TotalPoverty = B06012_002E) %>%
+  dplyr::select(-NAME, -starts_with("B")) %>%
+  mutate(pctWhite = ifelse(TotalPop > 0, Whites / TotalPop,0),
+         pctBachelors = ifelse(TotalPop > 0, ((FemaleBachelors + MaleBachelors) / TotalPop),0),
+         pctPoverty = ifelse(TotalPop > 0, TotalPoverty / TotalPop, 0),
+         year = "2019") %>%
+  dplyr::select(-Whites, -FemaleBachelors, -MaleBachelors, -TotalPoverty) 
+
+DC_Crime19 <- st_read("C:/Users/shaus/Downloads/Crime_Incidents_in_2019 (1).geojson")%>%
+  st_transform(st_crs(tracts19))
+
+MVT19 <- DC_Crime19 %>%
+  filter(OFFENSE == "MOTOR VEHICLE THEFT")
+
+MVT19_Tracts <- MVT19 %>%
+  st_join(tracts19) %>% 
+  mutate(count = 1) %>%
+  group_by(GEOID) %>%
+  summarise(MVT_count = sum(count))
+
+tracts19 <- tracts19 %>%
+  st_join(MVT19_Tracts)
+
+allTracts <- rbind(tracts09,tracts19) %>%
+  mutate(GEOID = GEOID.x)
+
+
+
+metroStops <- st_read("https://opendata.arcgis.com/datasets/54018b7f06b943f2af278bbe415df1de_52.geojson")%>%
+  st_transform(st_crs(allTracts))
+
+metroBuffers <- 
+  rbind(
+    st_buffer(metroStops, 2640) %>%
+      mutate(Legend = "Buffer") %>%
+      dplyr::select(Legend),
+    st_union(st_buffer(metroStops, 2640)) %>%
+      st_sf() %>%
+      mutate(Legend = "Unioned Buffer"))
+
+```
+
+## Visualizations comparing census variables across TOD and non-TOD tracts, 2009 vs. 2019
+```{r TOD vs non-TOD, include = TRUE, warning = FALSE, message = FALSE, results = 'markup'}
+
+buffer <- filter(metroBuffers, Legend=="Unioned Buffer")
+
+allTracts.group <- 
+  rbind(
+    st_centroid(allTracts)[buffer,] %>%
+      st_drop_geometry() %>%
+      left_join(allTracts) %>%
+      st_sf() %>%
+      mutate(TOD = "TOD"),
+    st_centroid(allTracts)[buffer, op = st_disjoint] %>%
+      st_drop_geometry() %>%
+      left_join(allTracts) %>%
+      st_sf() %>%
+      mutate(TOD = "Non-TOD")) %>%
+  mutate(MedRent.inf = ifelse(year == "2009", MedRent * 1.14, MedRent)) 
+
+allTracts.Summary <- 
+  st_drop_geometry(allTracts.group) %>%
+  group_by(year, TOD) %>%
+  summarize(Rent = mean(MedRent, na.rm = T),
+            Population = mean(TotalPop, na.rm = T),
+            Percent_White = mean(pctWhite, na.rm = T),
+            Percent_Bach = mean(pctBachelors, na.rm = T),
+            Percent_Poverty = mean(pctPoverty, na.rm = T))
+
+TOD_tracts <-
+  allTracts.group %>%
+  dplyr::select(TOD)%>%
+  filter(TOD == "TOD")
+TOD_tracts_combined <-
+  st_union(TOD_tracts) %>%
+  st_sf()
+
+allTractMedInc<- 
+  ggplot() +
+  geom_sf(data = allTracts.group, aes(fill = q5(MedHHInc))) +
+  geom_sf(data = TOD_tracts_combined, fill = "transparent", color = "orange", size = 1)+
+  scale_fill_manual(values = palette5,
+                    labels = qBr(allTracts.group, "MedHHInc"),
+                    name = "Household Median Income by Quintile") +
+  labs(title = "Figure 1.1: Median Income", subtitle = "DC; 2009") +
+  facet_wrap(~year) +
+  mapTheme() + theme(plot.title = element_text(size=22))
+
+allTractMedInc
+
+allTractMedRent<- 
+  ggplot() +
+  geom_sf(data = allTracts.group, aes(fill = q5(MedRent))) +
+  geom_sf(data = TOD_tracts_combined, fill = "transparent", color = "orange", size = 1)+
+  scale_fill_manual(values = palette5,
+                    labels = qBr(allTracts.group, "MedRent"),
+                    name = "Median Rent by Quintile") +
+  labs(title = "Figure 1.2 Median Rent", subtitle = "DC; 2009") +
+  facet_wrap(~year) +
+  mapTheme() + theme(plot.title = element_text(size=22))
+
+allTractMedRent
+
+allTractPctPov<- 
+  ggplot() +
+  geom_sf(data = allTracts.group, aes(fill = q5(pctPoverty))) +
+  geom_sf(data = TOD_tracts_combined, fill = "transparent", color = "orange", size = 1)+
+  scale_fill_manual(values = palette5,
+                    labels = qBr(allTracts.group, "pctPoverty"),
+                    name = "Population % Below Poverty Line") +
+  labs(title = "Figure 1.3: Percent of Households Below Poverty Line", subtitle = "DC; 2009") +
+  facet_wrap(~year) +
+  mapTheme() + theme(plot.title = element_text(size=22))
+
+allTractPctPov
+
+allTractTotalPop<- 
+  ggplot() +
+  geom_sf(data = allTracts.group, aes(fill = q5(TotalPop))) +
+  geom_sf(data = TOD_tracts_combined, fill = "transparent", color = "orange", size = 1)+
+  scale_fill_manual(values = palette5,
+                    labels = qBr(allTracts.group, "TotalPop"),
+                    name = "Popluation by Quintile") +
+  labs(title = "Figure 1.4: Total Population", subtitle = "DC; 2009") +
+  facet_wrap(~year) +
+  mapTheme() + theme(plot.title = element_text(size=22))
+
+allTractTotalPop
+```
+
+## TOD vs. Non-TOD Grouped Bar Plots and Table
+```{r Bar Plots, include = TRUE, warning = FALSE, message = FALSE, results = 'markup'}
+kable(allTracts.Summary) %>%
+  kable_styling() %>%
+  footnote(general_title = "\n",
+           general = "Figure 2.1: Table of Demographic Indicators for Transit Oriented Development and Non-Transit Oriented Development")
+
+allTracts.Summary %>%
+  gather(Variable, Value, -year, -TOD) %>%
+  ggplot(aes(year, Value, fill = TOD)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~Variable, scales = "free", ncol=5) +
+  scale_fill_manual(values = c("#bae4bc", "#0868ac")) +
+  labs(title = "Figure 2.2: Indicator differences across time and space") +
+  plotTheme() + theme(legend.position="bottom")
+```
+
+## Graduated Symbol Maps of Rent and Population within 1/2 Mile of Metro Stations
+```{r Graduated Maps, include = TRUE, warning = FALSE, message = FALSE, results = 'markup'}
+metroStopscoord <- metroStops %>%
+  st_transform(st_crs('ESRI:102685')) %>%
+  dplyr::mutate(x = sf::st_coordinates(.)[,1],
+                y = sf::st_coordinates(.)[,2]) %>%
+  distinct(NAME, .keep_all=TRUE)
+
+metroStopswithBuffers <-
+  st_transform(metroStopscoord, ('ESRI:102685'))%>%
+  st_buffer(2640) %>%
+  dplyr::select(NAME, geometry)
+
+joinBuffersStopsTracts <-
+  st_join(allTracts.group, metroStopswithBuffers)%>%
+  filter(!is.na(NAME))
+
+
+totalPopbyStop <- joinBuffersStopsTracts %>%
+  group_by(NAME, year, .add=TRUE) %>%
+  summarize(sumPop = sum(TotalPop))%>%
+  st_drop_geometry() %>%
+  right_join(metroStopscoord, by="NAME")
+
+rentbyStop <- joinBuffersStopsTracts %>%
+  st_join(metroStopscoord, by="NAME")
+
+map.TotalPopbyStop <-
+  ggplot()+
+  geom_sf(data=allTracts.group, color="white", fill="gray", alpha=0.4)+
+  geom_point(data=totalPopbyStop, aes(x=x, y=y, size=sumPop), color="black",fill = "green", alpha=0.5, pch = 21)+
+  scale_size_area(max_size = 8) +
+  guides(size=guide_legend("Sum of Population")) +
+  aes() +
+  labs(title="Figure 3.1: Total Population within 1/2 mile of D.C. Metro Stops",
+       subtitle="Washington, DC",
+       caption="Data: US Census Bureau; opendata.dc.gov") +
+  facet_wrap(~year) +
+  mapTheme()
+
+map.TotalPopbyStop
+
+map.MedRentbyStop <-
+  ggplot()+
+  geom_sf(data=allTracts.group, color="white", fill="gray", alpha=0.4)+
+  geom_point(data=rentbyStop, aes(x=x, y=y, size=rentbyStop$MedRent), color="black",fill = "turquoise", alpha=0.5, pch= 21)+
+  scale_size_area(max_size = 8) +
+  guides(size=guide_legend("Median Rent by Metro Stop")) +
+  aes() +
+  labs(title="Figure 3.2: Median Rent within 1/2 mi. of D.C. Metro Stops, by Stop",
+       subtitle="Washington, DC",
+       caption="Data: US Census Bureau; opendata.dc.gov") +
+  facet_wrap(~year) +
+  mapTheme()
+
+map.MedRentbyStop
+```
+## Rent as a Function of Distance from Metro Stations
+
+```{r Median Rent ~ Distance, include = TRUE, warning = FALSE, message = FALSE, results = 'markup'}
+
+mutipleRingBuffer <- function(inputPolygon, maxDistance, interval)
+{distances <- seq(0, maxDistance, interval)
+distances <- seq(0, maxDistance, interval)
+
+distancesCounter <- 2
+
+numberOfRings <- floor(maxDistance / interval)
+
+numberOfRingsCounter <- 1
+
+allRings <- data.frame()
+
+while (numberOfRingsCounter <= numberOfRings)
+{
+  if(distances[distancesCounter] < 0 & distancesCounter == 2)
+  {
+    
+    buffer1 <- st_buffer(inputPolygon, distances[distancesCounter])
+    
+    buffer1_ <- st_difference(inputPolygon, buffer1)
+   
+    thisRing <- st_cast(buffer1_, "POLYGON")
+    
+    thisRing <- as.data.frame(thisRing[,ncol(thisRing)])
+    
+    thisRing$distance <- distances[distancesCounter]
+  }
+  
+  else if(distances[distancesCounter] < 0 & distancesCounter > 2)
+  {
+   
+    buffer1 <- st_buffer(inputPolygon, distances[distancesCounter])
+   
+    buffer2 <- st_buffer(inputPolygon, distances[distancesCounter-1])
+    
+    thisRing <- st_difference(buffer2,buffer1)
+ 
+    thisRing <- st_cast(thisRing, "POLYGON")
+
+    thisRing <- as.data.frame(thisRing$geometry)
+
+    thisRing$distance <- distances[distancesCounter]
+  }
+
+  else
+  {
+
+    buffer1 <- st_buffer(inputPolygon, distances[distancesCounter])
+  
+    buffer1_ <- st_buffer(inputPolygon, distances[distancesCounter-1])
+   
+    thisRing <- st_difference(buffer1,buffer1_)
+
+    thisRing <- st_cast(thisRing, "POLYGON")
+
+    thisRing <- as.data.frame(thisRing[,ncol(thisRing)])
+
+    thisRing$distance <- distances[distancesCounter]
+  }
+
+  allRings <- rbind(allRings, thisRing)
+
+  distancesCounter <- distancesCounter + 1
+
+  numberOfRingsCounter <- numberOfRingsCounter + 1
+}
+
+allRings <- st_as_sf(allRings)
+}
+buffersDC <-
+  mutipleRingBuffer(buffer, 47520, 2640)
+geomlineplot <-
+  ggplot() +
+  geom_sf(data = buffersDC, aes(fill = distance)) +
+  labs(title = "Figure 5.2: Half Mile Buffers around Metro Stops in Washington DC",
+       caption = "Figure H") + mapTheme()
+plot(geomlineplot)
+
+allTracts.rings <-
+  st_join(st_centroid(dplyr::select(allTracts, GEOID, year)), mutipleRingBuffer(metroStops, 47520, 2640)) %>%
+  st_drop_geometry() %>%
+  left_join(dplyr::select(allTracts, GEOID, MedRent, MVT_count, year), by=c("GEOID"="GEOID", "year"="year")) %>%
+  st_sf() %>%
+  mutate(distance = distance/ 5280)
+
+allTracts.rings_summary <-
+  allTracts.rings %>%
+  st_drop_geometry() %>%
+  mutate(count = 1) %>%
+  group_by(distance, year, .add=T) %>%
+  summarise(Rent = mean(MedRent, na.rm=T), MVT_Total = sum(count), MVT = sum(MVT_count, na.rm = T)/MVT_Total)
+
+allTracts.rings_summary$distance <-
+  as.numeric(allTracts.rings_summary$distance)
+linegraph <-
+  ggplot(data=allTracts.rings_summary,
+         aes(x = distance, y = Rent, color = year)) +
+  geom_line() + geom_point() +
+  labs(title = "Figure 5.1: Rent as a Function of Distance to Metro Station Entrances", caption = "Figure I")
+
+
+
+plot(linegraph)
+```
+
+## Relationship Between Transit Access, Rent and Crime(Motor Vehicle Theft)
+
+For this section, I looked at the relationship between transit access, rent and reported motor vehicle thefts in Washington D.C.. The results showed an interesting relationship between the three variables that inverted overtime. In both 2009 and 2019, rents decreased at a linear rate moving farther away from metro stops. In 2019, however, this slope of the line was even steeper, indicating that over time the divide between rents TOD and non-TOD has become greater. 
+
+The relationship between motor vehicle thefts, on the other hand, inverted over time. In 2009, motor vehicle thefts increased sharply as distance from metro stations increased. In 2009, the overall count of motor vehicle thefts was significantly lower across the city, and this time decreased with distance from metro stops. Other than a clear overall decrease in crime, there is not enough information available to understand why this change occurred. 
+```{r Relationship Between Transit Access, Rent and Crime(Motor Vehicle Theft), include = TRUE, warning = FALSE, message = FALSE, results = 'markup'}
+
+MVTTracts.Summary <- 
+  st_drop_geometry(allTracts.group) %>%
+  group_by(year, TOD) %>%
+  summarize(MVT = sum(MVT_count, na.rm = T), Rent = mean(MedRent, na.rm = T))
+ 
+kable(MVTTracts.Summary) %>%
+  kable_styling() %>%
+  footnote(general_title = "\n",
+           general = "Figure 2.1: Table of Demographic Indicators for Transit Oriented Development and Non-Transit Oriented Development")
+
+MVTTracts.Summary %>%
+  gather(Variable, Value, -year, -TOD) %>%
+  ggplot(aes(year, Value, fill = TOD)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~Variable, scales = "free", ncol=5) +
+  scale_fill_manual(values = c("#bae4bc", "#0868ac")) +
+  labs(title = "Figure 2.2: Indicator differences across time and space") +
+  plotTheme() + theme(legend.position="bottom")
+
+linegraph <- 
+  ggplot()+
+  geom_line(data=allTracts.rings_summary,
+         aes(x = distance, y = MVT, color = year))+
+  geom_point(data=allTracts.rings_summary,
+         aes(x = distance, y = MVT, color = year))+
+  labs(title = "Figure 5.2: Motor Vehicle Thefts as a Function of Distance to Metro Station Entrances", caption = "Figure I")
+
+linegraph
+
+```
+ 
+ 
